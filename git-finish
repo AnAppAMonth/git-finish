@@ -62,6 +62,9 @@ if __name__ == "__main__":
     if ns.base == None:
         ns.base = 'master'
 
+    # Record progress for restoring on error
+    step = 0
+
     try:
         # Verify that <branch> is indeed the name of a branch
         try:
@@ -97,23 +100,52 @@ if __name__ == "__main__":
 
         # Finally, do the backup
         sys.stdout.write(subprocess.check_output('git update-ref refs/archive/%s %s' % (ns.branch, ns.branch), shell=True))
+        step = 1
 
         # Step 2: coalesce commits between <base> and <branch>
         sys.stdout.write(subprocess.check_output('git checkout %s' % ns.branch, shell=True))
         run_command('git coalesce --list %s' % ns.base)
+        step = 2
 
         # Step 3: merge <branch> to <base>
         sys.stdout.write(subprocess.check_output('git checkout %s' % ns.base, shell=True))
         if ns.no_ff:
             run_command('git merge --no-ff --no-commit %s' % ns.branch)
+            step = 3
             print 'Done: you need to manually commit the merge and delete branch `%s`' % ns.branch
         else:
             run_command('git merge --ff-only %s' % ns.branch)
+            step = 3
 
             # Step 4: delete <branch>
             sys.stdout.write(subprocess.check_output('git branch -d %s' % ns.branch, shell=True))
+            step = 4
             print 'All done.'
 
     except subprocess.CalledProcessError, e:
         print e.output
+
+        try:
+            # Try to restore to the state before running this command
+            if step == 4:
+                # You gotta be kidding me, this isn't possible
+                pass
+            elif step == 3:
+                # Umm, only failed to delete the branch, nothing serious
+                print '\nError encountered in step 4: failed to delete branch `%s`' % ns.branch
+            elif step == 2:
+                # We need to restore <branch> to previous state and delete refs/archive/<branch>
+                print '\nError encountered in step 3, trying to restore...'
+                sys.stdout.write(subprocess.check_output('git branch -f %s refs/archive/%s' % (ns.branch, ns.branch), shell=True))
+                sys.stdout.write(subprocess.check_output('git update-ref -d refs/archive/%s' % ns.branch, shell=True))
+                print 'Successfully restored branch `%s` to previous state and deleted `refs/archive/%s`' % (ns.branch, ns.branch)
+            elif step == 1:
+                # We need to delete refs/archive/<branch>
+                print '\nError encountered in step 2, trying to restore...'
+                sys.stdout.write(subprocess.check_output('git update-ref -d refs/archive/%s' % ns.branch, shell=True))
+                print 'Successfully deleted `refs/archive/%s`' % ns.branch
+        except subprocess.CalledProcessError, e2:
+            print e2.output
+            exit(e2.returncode)
+
         exit(e.returncode)
